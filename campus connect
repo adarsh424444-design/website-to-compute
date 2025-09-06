@@ -1,0 +1,455 @@
+/**
+ * Campus Connect – single-file full‑stack starter
+ * Tech: Node.js (Express) backend + TailwindCSS + LeafletJS frontend (served by Express)
+ *
+ * How to run:
+ * 1) Save this file as `server.js`
+ * 2) Run:   npm init -y && npm install express
+ * 3) Start: node server.js
+ * 4) Open:  http://localhost:3000
+ *
+ * What you get:
+ * - "Colleges" section with details & search
+ * - Listings for PG / Hostels / Flats / Rooms with price, rating, coordinates
+ * - Interactive map with markers (college + listings)
+ * - Auto distance calculation (in km) from selected college to each listing
+ * - Add new listings via form (stored in-memory for demo)
+ * - Clean, responsive UI with Tailwind
+ *
+ * Notes:
+ * - This is a demo with in-memory data. Replace with a real DB later (Mongo/Postgres).
+ * - All frontend assets are served from this single file.
+ */
+
+const express = require("express");
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(express.json());
+
+// ---- Demo Data (in-memory) -------------------------------------------------
+/** College shape
+ * { id, name, city, state, lat, lng, website, about }
+ */
+const colleges = [
+  {
+    id: "clg_1",
+    name: "Indian Institute of Technology Delhi (IIT Delhi)",
+    city: "New Delhi",
+    state: "Delhi",
+    lat: 28.5450,
+    lng: 77.1926,
+    website: "https://home.iitd.ac.in/",
+    about:
+      "Premier engineering institute known for research and innovation across disciplines.",
+  },
+  {
+    id: "clg_2",
+    name: "Delhi University (North Campus)",
+    city: "New Delhi",
+    state: "Delhi",
+    lat: 28.6892,
+    lng: 77.2110,
+    website: "https://www.du.ac.in/",
+    about:
+      "One of India's largest universities with diverse colleges and vibrant student life.",
+  },
+  {
+    id: "clg_3",
+    name: "Indian Institute of Technology Bombay (IIT Bombay)",
+    city: "Mumbai",
+    state: "Maharashtra",
+    lat: 19.1334,
+    lng: 72.9133,
+    website: "https://www.iitb.ac.in/",
+    about: "Top-ranked institute with strong industry connect and research output.",
+  },
+  {
+    id: "clg_4",
+    name: "Savitribai Phule Pune University",
+    city: "Pune",
+    state: "Maharashtra",
+    lat: 18.5535,
+    lng: 73.8269,
+    website: "https://unipune.ac.in/",
+    about: "Renowned public university with a large, green campus and broad programs.",
+  },
+];
+
+/** Listing shape
+ * { id, title, type: "PG"|"Hostel"|"Flat"|"Room", price, rating, address, lat, lng, collegeId? }
+ */
+let listings = [
+  {
+    id: "lst_1",
+    title: "Green Nest PG",
+    type: "PG",
+    price: 9500,
+    rating: 4.3,
+    address: "Hauz Khas, New Delhi",
+    lat: 28.5489,
+    lng: 77.2031,
+    collegeId: "clg_1",
+  },
+  {
+    id: "lst_2",
+    title: "North Star Hostel",
+    type: "Hostel",
+    price: 6500,
+    rating: 3.9,
+    address: "GTB Nagar, Delhi",
+    lat: 28.6982,
+    lng: 77.2060,
+    collegeId: "clg_2",
+  },
+  {
+    id: "lst_3",
+    title: "Lakeview 1BHK Flat",
+    type: "Flat",
+    price: 18000,
+    rating: 4.6,
+    address: "Powai, Mumbai",
+    lat: 19.1176,
+    lng: 72.9043,
+    collegeId: "clg_3",
+  },
+  {
+    id: "lst_4",
+    title: "Single Room near Univ Rd",
+    type: "Room",
+    price: 8000,
+    rating: 4.1,
+    address: "Aundh, Pune",
+    lat: 18.5636,
+    lng: 73.8077,
+    collegeId: "clg_4",
+  },
+];
+
+// ---- API -------------------------------------------------------------------
+app.get("/api/colleges", (req, res) => {
+  res.json(colleges);
+});
+
+app.get("/api/listings", (req, res) => {
+  const { collegeId, type, q, minPrice, maxPrice } = req.query;
+  let data = [...listings];
+  if (collegeId) data = data.filter((l) => l.collegeId === collegeId);
+  if (type) data = data.filter((l) => l.type.toLowerCase() === String(type).toLowerCase());
+  if (q) {
+    const s = String(q).toLowerCase();
+    data = data.filter((l) =>
+      l.title.toLowerCase().includes(s) ||
+      l.address.toLowerCase().includes(s)
+    );
+  }
+  if (minPrice) data = data.filter((l) => l.price >= Number(minPrice));
+  if (maxPrice) data = data.filter((l) => l.price <= Number(maxPrice));
+  res.json(data);
+});
+
+app.post("/api/listings", (req, res) => {
+  const { title, type, price, rating, address, lat, lng, collegeId } = req.body || {};
+  if (!title || !type || !price || !address || !lat || !lng) {
+    return res.status(400).json({ error: "Missing required fields." });
+  }
+  const id = `lst_${Date.now()}`;
+  const parsed = {
+    id,
+    title: String(title),
+    type: String(type),
+    price: Number(price),
+    rating: rating ? Number(rating) : null,
+    address: String(address),
+    lat: Number(lat),
+    lng: Number(lng),
+    collegeId: collegeId || null,
+  };
+  listings.push(parsed);
+  res.status(201).json(parsed);
+});
+
+// ---- Frontend (served from here) -------------------------------------------
+app.get("/", (req, res) => {
+  res.type("html").send(`
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Campus Connect</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <style>
+    html, body { height: 100%; }
+    #map { height: 100%; }
+    .badge { @apply text-xs px-2 py-0.5 rounded-full border; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+  <header class="sticky top-0 z-50 bg-white/80 backdrop-blur border-b">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3">
+      <div class="w-9 h-9 rounded-2xl bg-indigo-600 flex items-center justify-center text-white font-bold">CC</div>
+      <h1 class="text-xl font-semibold">Campus Connect</h1>
+      <span class="ml-auto text-sm text-gray-500">Find PG • Hostels • Flats • Rooms near your college</span>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto p-4 grid grid-cols-1 lg:grid-cols-5 gap-4">
+    <!-- Left: controls + list -->
+    <section class="lg:col-span-2 space-y-4">
+      <div class="p-4 bg-white rounded-2xl shadow-sm border space-y-3">
+        <div class="flex gap-2">
+          <input id="search" class="flex-1 border rounded-xl px-3 py-2 outline-none focus:ring w-full" placeholder="Search address or listing title..." />
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <select id="college" class="border rounded-xl px-3 py-2 w-full"></select>
+          <select id="type" class="border rounded-xl px-3 py-2 w-full">
+            <option value="">All types</option>
+            <option>PG</option>
+            <option>Hostel</option>
+            <option>Flat</option>
+            <option>Room</option>
+          </select>
+          <input id="minPrice" type="number" min="0" class="border rounded-xl px-3 py-2 w-full" placeholder="Min ₹" />
+          <input id="maxPrice" type="number" min="0" class="border rounded-xl px-3 py-2 w-full" placeholder="Max ₹" />
+        </div>
+        <button id="apply" class="w-full bg-indigo-600 text-white rounded-xl py-2 font-medium">Search</button>
+        <p id="hint" class="text-xs text-gray-500"></p>
+      </div>
+
+      <div class="p-4 bg-white rounded-2xl shadow-sm border">
+        <h2 class="text-lg font-semibold mb-2">Listings</h2>
+        <div id="list" class="space-y-3"></div>
+      </div>
+
+      <div class="p-4 bg-white rounded-2xl shadow-sm border">
+        <h2 class="text-lg font-semibold mb-3">Add a Listing (demo)</h2>
+        <form id="addForm" class="grid grid-cols-2 gap-2">
+          <input name="title" class="border rounded-xl px-3 py-2 col-span-2" placeholder="Title" required />
+          <select name="type" class="border rounded-xl px-3 py-2" required>
+            <option>PG</option><option>Hostel</option><option>Flat</option><option>Room</option>
+          </select>
+          <input name="price" type="number" min="0" class="border rounded-xl px-3 py-2" placeholder="Price (₹)" required />
+          <input name="rating" type="number" step="0.1" min="0" max="5" class="border rounded-xl px-3 py-2" placeholder="Rating (0–5)" />
+          <input name="address" class="border rounded-xl px-3 py-2 col-span-2" placeholder="Address" required />
+          <input name="lat" type="number" step="0.000001" class="border rounded-xl px-3 py-2" placeholder="Latitude" required />
+          <input name="lng" type="number" step="0.000001" class="border rounded-xl px-3 py-2" placeholder="Longitude" required />
+          <select name="collegeId" class="border rounded-xl px-3 py-2 col-span-2">
+            <option value="">(Optional) Link to college</option>
+          </select>
+          <button class="bg-emerald-600 text-white rounded-xl py-2 col-span-2">Add Listing</button>
+        </form>
+        <p class="text-xs text-gray-500 mt-2">Tip: Use Google Maps to copy lat/lng for accuracy.</p>
+      </div>
+    </section>
+
+    <!-- Right: map -->
+    <section class="lg:col-span-3 overflow-hidden rounded-2xl border shadow-sm">
+      <div id="map"></div>
+    </section>
+  </main>
+
+  <footer class="max-w-7xl mx-auto p-4 text-center text-xs text-gray-500">
+    © <span id="year"></span> Campus Connect — Demo build.
+  </footer>
+
+  <script>
+    const fmtINR = (n) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
+    const haversine = (a, b) => {
+      const toRad = (x) => x * Math.PI / 180;
+      const R = 6371; // km
+      const dLat = toRad(b.lat - a.lat);
+      const dLng = toRad(b.lng - a.lng);
+      const lat1 = toRad(a.lat);
+      const lat2 = toRad(b.lat);
+      const h = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLng/2)**2;
+      return 2 * R * Math.asin(Math.sqrt(h));
+    };
+
+    const els = {
+      search: document.querySelector('#search'),
+      college: document.querySelector('#college'),
+      type: document.querySelector('#type'),
+      minPrice: document.querySelector('#minPrice'),
+      maxPrice: document.querySelector('#maxPrice'),
+      apply: document.querySelector('#apply'),
+      list: document.querySelector('#list'),
+      hint: document.querySelector('#hint'),
+      addForm: document.querySelector('#addForm'),
+      addFormCollege: null,
+    };
+
+    document.getElementById('year').textContent = new Date().getFullYear();
+
+    let state = {
+      colleges: [],
+      listings: [],
+      selectedCollege: null,
+      markers: { listings: [], college: null },
+      map: null,
+    };
+
+    async function fetchJSON(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Failed ' + url);
+      return res.json();
+    }
+
+    async function load() {
+      state.colleges = await fetchJSON('/api/colleges');
+      populateCollegeSelects();
+      await runSearch();
+      setupMap();
+    }
+
+    function populateCollegeSelects() {
+      // Main filter select
+      els.college.innerHTML = '<option value="">Choose college</option>' + state.colleges.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+      // Add-form select
+      const addSelect = document.querySelector('#addForm select[name="collegeId"]');
+      els.addFormCollege = addSelect;
+      addSelect.innerHTML = '<option value="">(Optional) Link to college</option>' + state.colleges.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+    }
+
+    async function runSearch() {
+      const params = new URLSearchParams();
+      if (els.search.value) params.set('q', els.search.value);
+      if (els.college.value) params.set('collegeId', els.college.value);
+      if (els.type.value) params.set('type', els.type.value);
+      if (els.minPrice.value) params.set('minPrice', els.minPrice.value);
+      if (els.maxPrice.value) params.set('maxPrice', els.maxPrice.value);
+
+      state.listings = await fetchJSON('/api/listings?' + params.toString());
+
+      const sel = state.colleges.find(c => c.id === els.college.value) || null;
+      state.selectedCollege = sel;
+
+      renderList();
+      updateMap();
+
+      const parts = [];
+      if (els.search.value) parts.push('search: "' + els.search.value + '"');
+      if (els.type.value) parts.push('type: ' + els.type.value);
+      if (els.minPrice.value || els.maxPrice.value) parts.push('budget: ' + (els.minPrice.value || 0) + '–' + (els.maxPrice.value || '∞'));
+      els.hint.textContent = parts.length ? ('Filters → ' + parts.join(', ')) : '';
+    }
+
+    function renderList() {
+      const c = state.selectedCollege;
+      els.list.innerHTML = state.listings.map((l, idx) => {
+        const dist = c ? haversine({lat:c.lat,lng:c.lng}, {lat:l.lat,lng:l.lng}) : null;
+        return `
+          <div class="border rounded-xl p-3 hover:shadow-sm transition cursor-pointer" data-idx="${idx}">
+            <div class="flex items-start justify-between gap-2">
+              <div>
+                <div class="flex items-center gap-2">
+                  <h3 class="font-medium">${l.title}</h3>
+                  <span class="badge">${l.type}</span>
+                </div>
+                <p class="text-sm text-gray-600">${l.address}</p>
+                ${c ? `<p class="text-xs text-gray-500 mt-1">~${dist.toFixed(2)} km from <span class="font-medium">${c.name}</span></p>` : ''}
+              </div>
+              <div class="text-right">
+                <div class="font-semibold">${fmtINR(l.price)}</div>
+                ${l.rating ? `<div class="text-xs text-emerald-700">★ ${l.rating}</div>` : ''}
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('') || '<p class="text-sm text-gray-500">No results. Try changing filters.</p>';
+
+      // Hook clicks to focus marker
+      els.list.querySelectorAll('[data-idx]').forEach(card => {
+        card.addEventListener('click', () => {
+          const idx = Number(card.getAttribute('data-idx'));
+          const l = state.listings[idx];
+          focusListingOnMap(l);
+        });
+      });
+    }
+
+    function setupMap() {
+      const india = [22.9734, 78.6569];
+      state.map = L.map('map').setView(india, 5);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap'
+      }).addTo(state.map);
+      updateMap();
+    }
+
+    function clearMarkers() {
+      state.markers.listings.forEach(m => state.map.removeLayer(m));
+      state.markers.listings = [];
+      if (state.markers.college) { state.map.removeLayer(state.markers.college); state.markers.college = null; }
+    }
+
+    function updateMap() {
+      if (!state.map) return;
+      clearMarkers();
+
+      // College marker
+      if (state.selectedCollege) {
+        const c = state.selectedCollege;
+        const collegeIcon = L.divIcon({
+          className: 'college-icon',
+          html: '<div style="background:#4f46e5;color:#fff;border-radius:9999px;padding:6px 10px;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,0.25)">🎓</div>',
+          iconSize: [28, 28],
+          iconAnchor: [14, 14]
+        });
+        state.markers.college = L.marker([c.lat, c.lng], { icon: collegeIcon }).addTo(state.map).bindPopup('<b>' + c.name + '</b><br/>' + c.city + ', ' + c.state);
+      }
+
+      // Listing markers
+      const bounds = [];
+      state.listings.forEach((l) => {
+        const m = L.marker([l.lat, l.lng]).addTo(state.map).bindPopup('<b>' + l.title + '</b><br/>' + (l.address||'') + '<br/>' + (l.price ? fmtINR(l.price) : ''));
+        state.markers.listings.push(m);
+        bounds.push([l.lat, l.lng]);
+      });
+
+      if (state.selectedCollege) bounds.push([state.selectedCollege.lat, state.selectedCollege.lng]);
+
+      if (bounds.length) {
+        state.map.fitBounds(bounds, { padding: [30, 30] });
+      }
+    }
+
+    function focusListingOnMap(l) {
+      if (!state.map) return;
+      state.map.setView([l.lat, l.lng], 15);
+    }
+
+    els.apply.addEventListener('click', runSearch);
+
+    // Add form
+    els.addForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(els.addForm);
+      const body = Object.fromEntries(fd.entries());
+      body.price = Number(body.price);
+      if (body.rating) body.rating = Number(body.rating);
+      body.lat = Number(body.lat);
+      body.lng = Number(body.lng);
+
+      const res = await fetch('/api/listings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      });
+      if (!res.ok) { alert('Failed to add listing'); return; }
+      els.addForm.reset();
+      await runSearch();
+    });
+
+    // Load all
+    load();
+  </script>
+</body>
+</html>
+  `);
+});
+
+app.listen(PORT, () => {
+  console.log(`Campus Connect running at http://localhost:${PORT}`);
+});
